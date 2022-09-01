@@ -93,7 +93,7 @@ gym = gymapi.acquire_gym()
 custom_parameters = [
     {"name": "--controller", "type": str, "default": "ik",
      "help": "Controller to use for rm65. Options are {ik, osc}"},
-    {"name": "--num_envs", "type": int, "default": 1, "help": "Number of environments to create"},
+    {"name": "--num_envs", "type": int, "default": 2, "help": "Number of environments to create"},
 ]
 args = gymutil.parse_arguments(
     description="rm65 Jacobian Inverse Kinematics (IK) + Operational Space Control (OSC) Example",
@@ -111,17 +111,23 @@ device = args.sim_device if args.use_gpu_pipeline else 'cpu'
 sim_params = gymapi.SimParams()
 sim_params.up_axis = gymapi.UP_AXIS_Z
 sim_params.gravity = gymapi.Vec3(0.0, 0.0, -9.8)
-sim_params.dt = 1.0 / 60.0
+sim_params.dt = 0.001 #1.0 / 60.0
 sim_params.substeps = 2
 sim_params.use_gpu_pipeline = args.use_gpu_pipeline
 if args.physics_engine == gymapi.SIM_PHYSX:
-    sim_params.physx.solver_type = 1
-    sim_params.physx.num_position_iterations = 8
+    # sim_params.physx.solver_type = 1
+    # sim_params.physx.num_position_iterations = 8
+    # sim_params.physx.num_velocity_iterations = 1
+    # sim_params.physx.rest_offset = 0.0
+    # sim_params.physx.contact_offset = 0.001
+    # sim_params.physx.friction_offset_threshold = 0.001
+    # sim_params.physx.friction_correlation_distance = 0.0005
+    # sim_params.physx.num_threads = args.num_threads
+    # sim_params.physx.use_gpu = args.use_gpu
+    sim_params.physx.solver_type = 0
+    sim_params.physx.bounce_threshold_velocity = 0.1
+    sim_params.physx.num_position_iterations = 4
     sim_params.physx.num_velocity_iterations = 1
-    sim_params.physx.rest_offset = 0.0
-    sim_params.physx.contact_offset = 0.001
-    sim_params.physx.friction_offset_threshold = 0.001
-    sim_params.physx.friction_correlation_distance = 0.0005
     sim_params.physx.num_threads = args.num_threads
     sim_params.physx.use_gpu = args.use_gpu
 else:
@@ -152,11 +158,21 @@ asset_root = "/home/jia/Workspace/reinforcement_learning/rl_sim/rl_sim/assets"
 # load rm65 asset
 rm65_asset_file = "rm65_models/rm_65_blocker.urdf"
 asset_options = gymapi.AssetOptions()
-asset_options.armature = 0.01
+# asset_options.armature = 0.01
 asset_options.fix_base_link = True
 asset_options.disable_gravity = True
-asset_options.flip_visual_attachments = True
+asset_options.flip_visual_attachments = False
 rm65_asset = gym.load_asset(sim, asset_root, rm65_asset_file, asset_options)
+
+ball_asset_file = "rm65_models/ball.urdf"
+asset_options = gymapi.AssetOptions()
+asset_options.linear_damping = 10
+print("############### linear_damping: ", asset_options.linear_damping)
+# asset_options.armature = 1
+asset_options.fix_base_link = False
+asset_options.disable_gravity = False
+asset_options.flip_visual_attachments = False
+ball_asset = gym.load_asset(sim, asset_root, ball_asset_file, asset_options)
 
 # configure rm65 dofs
 rm65_dof_props = gym.get_asset_dof_properties(rm65_asset)
@@ -164,9 +180,6 @@ rm65_lower_limits = rm65_dof_props["lower"]
 rm65_upper_limits = rm65_dof_props["upper"]
 rm65_ranges = rm65_upper_limits - rm65_lower_limits
 rm65_mids = 0.3 * (rm65_upper_limits + rm65_lower_limits)
-
-print("###########", rm65_lower_limits)
-print("###########", rm65_upper_limits)
 
 
 # use position drive for all dofs
@@ -177,7 +190,7 @@ rm65_dof_props["damping"][:6].fill(40.0)
 # default dof states and position targets
 rm65_num_dofs = gym.get_asset_dof_count(rm65_asset)
 default_dof_pos = np.zeros(rm65_num_dofs, dtype=np.float32)
-default_dof_pos[:6] = rm65_mids[:6]
+default_dof_pos[:6] = np.array([-0.0000043932, 0.7256821709, 1.8144094986, 0.0000124934, -0.9692879964, -0.0000071757])
 
 default_dof_state = np.zeros(rm65_num_dofs, gymapi.DofState.dtype)
 default_dof_state["pos"] = default_dof_pos
@@ -200,6 +213,9 @@ print("Creating %d environments" % num_envs)
 rm65_pose = gymapi.Transform()
 rm65_pose.p = gymapi.Vec3(0, 0, 0)
 
+ball_pose = gymapi.Transform()
+ball_pose.p = gymapi.Vec3(-0.59, 0, 0.5)
+
 envs = []
 hand_idxs = []
 init_pos_list = []
@@ -208,6 +224,7 @@ init_rot_list = []
 # add ground plane
 plane_params = gymapi.PlaneParams()
 plane_params.normal = gymapi.Vec3(0, 0, 1)
+plane_params.restitution = 1
 gym.add_ground(sim, plane_params)
 
 for i in range(num_envs):
@@ -217,6 +234,37 @@ for i in range(num_envs):
 
     # add rm65
     rm65_handle = gym.create_actor(env, rm65_asset, rm65_pose, "rm65", i, 2)
+    rm65props = gym.get_actor_rigid_shape_properties(env, rm65_handle)
+    rm65props[7].restitution = 1
+    rm65props[7].friction = 0
+    print("################# rm65props")
+    print("compliance", rm65props[7].compliance)
+    print("contact_offset", rm65props[7].contact_offset)
+    print("filter", rm65props[7].filter)
+    print("friction", rm65props[7].friction)
+    print("rest_offset", rm65props[7].rest_offset)
+    print("restitution", rm65props[7].restitution)
+    print("rolling_friction", rm65props[7].rolling_friction)
+    print("thickness", rm65props[7].thickness)
+    print("torsion_friction", rm65props[7].torsion_friction)
+    gym.set_actor_rigid_shape_properties(env, rm65_handle, rm65props)
+
+    # add ball
+    ball = gym.create_actor(env, ball_asset, ball_pose, "ball", i, 0)
+    ballprops = gym.get_actor_rigid_shape_properties(env, ball)
+    ballprops[0].restitution = 1
+    ballprops[0].friction = 0
+    print("############### ballprops")
+    print("compliance", ballprops[0].compliance)
+    print("contact_offset", ballprops[0].contact_offset)
+    print("filter", ballprops[0].filter)
+    print("friction", ballprops[0].friction)
+    print("rest_offset", ballprops[0].rest_offset)
+    print("restitution", ballprops[0].restitution)
+    print("rolling_friction", ballprops[0].rolling_friction)
+    print("thickness", ballprops[0].thickness)
+    print("torsion_friction", ballprops[0].torsion_friction)
+    gym.set_actor_rigid_shape_properties(env, ball, ballprops)
 
     # set dof properties
     gym.set_actor_dof_properties(env, rm65_handle, rm65_dof_props)
@@ -287,6 +335,10 @@ hand_restart = torch.full([num_envs], False, dtype=torch.bool).to(device)
 pos_action = torch.zeros_like(dof_pos).squeeze(-1)
 effort_action = torch.zeros_like(pos_action)
 
+qdata = np.loadtxt("/home/jia/Workspace/reinforcement_learning/rl_sim/data/rm_65_trajs/traj2_2s_10ms.txt")
+# qdata = np.loadtxt("qarr_20220901_141023.txt")[0:-1:16,:]
+ndata = qdata.shape[0]
+data_i = 0
 # simulation loop
 while not gym.query_viewer_has_closed(viewer):
 
@@ -300,15 +352,14 @@ while not gym.query_viewer_has_closed(viewer):
     gym.refresh_jacobian_tensors(sim)
     gym.refresh_mass_matrix_tensors(sim)
 
-    hand_pos = rb_states[hand_idxs, :3]
-    hand_rot = rb_states[hand_idxs, 3:7]
-    hand_vel = rb_states[hand_idxs, 7:]
+    pos_action[:, :6] = dof_pos.squeeze(-1)[:, :6] #+ control_ik(dpose)
 
-    pos_action[:, :7] = dof_pos.squeeze(-1)[:, :6] #+ control_ik(dpose)
+    # pos_action[:, :6] = torch.from_numpy(np.tile(qdata[data_i,:],(num_envs,1))) 
+    # data_i = data_i+1 if data_i<ndata-1 else ndata-1
 
     # Deploy actions
     gym.set_dof_position_target_tensor(sim, gymtorch.unwrap_tensor(pos_action))
-    gym.set_dof_actuation_force_tensor(sim, gymtorch.unwrap_tensor(effort_action))
+    # gym.set_dof_actuation_force_tensor(sim, gymtorch.unwrap_tensor(effort_action))
 
     # update viewer
     gym.step_graphics(sim)
